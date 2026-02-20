@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HALO - Switch 2 Edition</title>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Segoe UI', Arial, sans-serif; }
@@ -67,6 +68,32 @@ canvas { image-rendering: auto; }
   color: #0f8; font-size: 11px; font-family: monospace; text-align: right;
   display: none; text-shadow: 0 0 6px #000;
 }
+#voice-status {
+  position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%);
+  z-index: 5; color: #4af; font-size: 11px; font-family: monospace;
+  text-shadow: 0 0 6px #000; pointer-events: none;
+}
+#overlay-preview-wrap {
+  display: none; flex-direction: column; align-items: center; margin: 10px 0 6px;
+}
+#overlay-cam-preview {
+  border: 2px solid rgba(0,255,128,0.5); border-radius: 8px;
+  background: #000; box-shadow: 0 0 20px rgba(0,255,128,0.15);
+}
+#overlay-gesture-label {
+  color: #0f8; font-size: 12px; font-family: monospace; margin-top: 4px;
+  letter-spacing: 2px; min-height: 18px; text-shadow: 0 0 8px rgba(0,255,128,0.4);
+}
+#btn-preview-cam {
+  background: none; border: 1px solid rgba(0,255,128,0.4); color: #0f8;
+  font-size: 12px; padding: 6px 18px; border-radius: 3px; cursor: pointer;
+  font-family: inherit; letter-spacing: 3px; text-transform: uppercase;
+  transition: all 0.3s; margin: 6px 0;
+}
+#btn-preview-cam:hover { background: rgba(0,255,128,0.1); box-shadow: 0 0 15px rgba(0,255,128,0.2); }
+#btn-preview-cam.active { border-color: #0f8; color: #fff; background: rgba(0,255,128,0.15); }
+@keyframes micPulse { 0%,100%{opacity:0.6;} 50%{opacity:1;} }
+@keyframes cmdFlash { 0%{transform:scale(1);opacity:1;} 100%{transform:scale(1.02);opacity:0.85;} }
 </style>
 </head>
 <body>
@@ -75,21 +102,29 @@ canvas { image-rendering: auto; }
   <h1>HALO</h1>
   <div class="subtitle">Combat Evolved &#8226; Switch 2 Edition</div>
   <div class="instructions" id="instr-camera" style="display:none">
-    <span>LEFT HAND</span> Move (position = direction) &#8226; <span>FIST</span> Sprint<br>
-    <span>RIGHT HAND</span> Aim &#8226; <span>PINCH</span> Fire &#8226; <span>SPREAD</span> Reload<br>
-    <span>PEACE SIGN</span> Open Door &#8226; <span>1/2/3 FINGERS (left)</span> Switch Weapon
+    <span>🧠 FACE</span> Tilt forward/back to move &#8226; <span>🛑 STOP SIGN</span> Open palm = freeze<br>
+    <span>RIGHT HAND</span> Aim &#8226; <span>PINCH</span> Fire &#8226; <span>✌️ PEACE</span> Door<br>
+    <span>LEFT FIST</span> Sprint &#8226; <span>LEFT OPEN</span> Grenade &#8226; <span>HEAD TURN</span> Look<br>
+    <span>🎤 VOICE</span> grenade / rifle / pistol / shotgun / cover me / attack
   </div>
   <div class="instructions" id="instr-keyboard">
     <span>WASD</span> Move &#8226; <span>MOUSE</span> Aim &#8226; <span>CLICK</span> Fire<br>
-    <span>R</span> Reload &#8226; <span>1 2 3</span> Weapons &#8226; <span>SHIFT</span> Sprint &#8226; <span>E</span> Open Door
+    <span>R</span> Reload &#8226; <span>1 2 3</span> Weapons &#8226; <span>SHIFT</span> Sprint &#8226; <span>E</span> Open Door<br>
+    <span>VOICE</span> Say: rifle / pistol / shotgun / reload &#8226; attack / retreat / cover me / follow / hold
   </div>
   <div class="cam-select-row" id="cam-select-row" style="display:none">
     <label for="cam-selector">Camera:</label>
     <select id="cam-selector"><option value="">Detecting cameras...</option></select>
     <button id="btn-refresh-cams" style="background:none;border:1px solid #4af;color:#4af;border-radius:3px;padding:4px 8px;cursor:pointer;font-size:11px" title="Refresh camera list">&#x21BB;</button>
   </div>
+  <button id="btn-preview-cam">&#x1F4F9; Preview Camera</button>
+  <div id="overlay-preview-wrap">
+    <canvas id="overlay-cam-preview" width="320" height="240"></canvas>
+    <div id="overlay-gesture-label"></div>
+  </div>
   <div>
     <button class="start-btn camera-btn" id="btn-camera">&#x1F4F7; Play with Camera</button>
+    <button class="start-btn camera-btn" id="btn-camera-tutorial" style="font-size:14px;padding:10px 30px;border-color:#fd0;color:#fd0">🎓 Camera Tutorial (Easy!)</button>
     <button class="start-btn" id="btn-keyboard">&#x2328; Play with Keyboard</button>
   </div>
   <button id="toggle-help">? HOW TO PLAY WITH CAMERA</button>
@@ -111,9 +146,11 @@ canvas { image-rendering: auto; }
     </ol>
     <h4>3. Hand Controls</h4>
     <ul>
-      <li><span class="tip">LEFT HAND &mdash; Movement:</span> Hold your left hand up. Move it left/right/up/down to walk in that direction. The further from center, the faster you move.</li>
-      <li><span class="tip">LEFT FIST:</span> Make a fist with your left hand to sprint.</li>
-      <li><span class="tip">LEFT 1/2/3 FINGERS:</span> Hold up 1, 2, or 3 fingers on your left hand to switch weapons.</li>
+      <li><span class="tip">FACE &mdash; Movement:</span> Tilt your head forward to walk, tilt back to go backwards, tilt left/right to strafe. The more you tilt, the faster you go!</li>
+      <li><span class="tip">🛑 STOP SIGN:</span> Hold up your open palm like a traffic cop to FREEZE in place. Works with either hand.</li>
+      <li><span class="tip">LEFT FIST:</span> Make a fist with your left hand to sprint while moving.</li>
+      <li><span class="tip">LEFT OPEN PALM:</span> Spread all 5 fingers on your left hand to throw a grenade! (1.5s cooldown)</li>
+      <li><span class="tip">VOICE WEAPONS:</span> Say &ldquo;rifle&rdquo;, &ldquo;pistol&rdquo;, or &ldquo;shotgun&rdquo; to switch. Say &ldquo;grenade&rdquo; to throw!</li>
       <li><span class="tip">RIGHT HAND &mdash; Aiming:</span> Hold your right hand up. Move it to look/aim around.</li>
       <li><span class="tip">RIGHT PINCH:</span> Pinch your thumb and index finger together on your right hand to fire.</li>
       <li><span class="tip">RIGHT SPREAD:</span> Spread all five fingers on your right hand to reload.</li>
@@ -250,6 +287,19 @@ function playSound(type) {
         const n=audioCtx.createBufferSource(),g2=audioCtx.createGain(); n.buffer=b;
         g2.gain.setValueAtTime(0.1,now); g2.gain.exponentialRampToValueAtTime(0.001,now+0.3);
         n.connect(g2); g2.connect(audioCtx.destination); n.start(now); n.stop(now+0.3); } break;
+    case 'grenade_throw':
+      osc.type='sawtooth'; osc.frequency.setValueAtTime(120,now); osc.frequency.exponentialRampToValueAtTime(60,now+0.15);
+      gain.gain.setValueAtTime(0.2,now); gain.gain.exponentialRampToValueAtTime(0.001,now+0.15);
+      osc.start(now); osc.stop(now+0.15); break;
+    case 'explosion':
+      osc.type='square'; osc.frequency.setValueAtTime(60,now); osc.frequency.exponentialRampToValueAtTime(20,now+0.5);
+      gain.gain.setValueAtTime(0.4,now); gain.gain.exponentialRampToValueAtTime(0.001,now+0.5);
+      osc.start(now); osc.stop(now+0.5);
+      { const b=audioCtx.createBuffer(1,audioCtx.sampleRate*0.5,audioCtx.sampleRate),d=b.getChannelData(0);
+        for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/d.length,0.3)*0.9;
+        const n=audioCtx.createBufferSource(),g2=audioCtx.createGain(); n.buffer=b;
+        g2.gain.setValueAtTime(0.5,now); g2.gain.exponentialRampToValueAtTime(0.001,now+0.5);
+        n.connect(g2); g2.connect(audioCtx.destination); n.start(now); n.stop(now+0.5); } break;
   }
 }
 
@@ -291,6 +341,7 @@ const mapData = [
   1,0,0,0,0,0,0,0,0,0,1,0,0,2,0,6,2,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1,
   1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 ];
+const mainMapData = [...mapData]; // backup of original main level
 
 // Door system
 const doors = new Map();
@@ -448,7 +499,7 @@ const player = {
   x:2.5, y:2.5, angle:0, pitch:0,
   health:100, maxHealth:100, shield:100, maxShield:100,
   shieldRegenTimer:0, shieldRegenDelay:3.0, shieldRegenRate:30, shieldFlash:0,
-  moveSpeed:3.0, sprintSpeed:5.2, weapon:0,
+  moveSpeed:4.0, sprintSpeed:6.5, weapon:0,
   weapons: [
     {name:'MA5B ASSAULT RIFLE',ammo:32,maxAmmo:32,reserve:256,fireRate:0.08,damage:12,spread:0.03,auto:true,sound:'shoot'},
     {name:'M6D PISTOL',ammo:12,maxAmmo:12,reserve:120,fireRate:0.3,damage:25,spread:0.01,auto:false,sound:'shoot'},
@@ -457,6 +508,7 @@ const player = {
   fireTimer:0, muzzleFlash:0, bobPhase:0, bobAmount:0,
   reloading:false, reloadTimer:0, kills:0, damageDealt:0, damageTaken:0,
   weaponKickback:0, damageFlash:0, shieldRegenSoundCd:0,
+  grenades:4, maxGrenades:4, grenadeTimer:0,
 };
 
 // ============================================================================
@@ -473,6 +525,7 @@ let gameRunning=false, gameTime=0;
 function createEnemy(type,x,y){const t=ENEMY_TYPES[type];return{type,x,y,health:t.health,maxHealth:t.health,speed:t.speed,damage:t.damage,fireRate:t.fireRate,range:t.range,size:t.size,points:t.points,fireTimer:Math.random()*t.fireRate,state:'idle',alertTimer:0,lastSeen:null,alive:true,animFrame:0,animTimer:0,hitFlash:0,shootSound:t.shootSound};}
 
 function spawnEnemies(){
+  if (currentLevel === 'tutorial') { spawnTutorialEnemies(); return; }
   enemies=[];
   const pos={
     grunt:[[5,10],[6,11],[10,5],[13,2],[14,3],[4,13],[7,12],[2,9],[2,10],[20,2],[24,5],[28,3],[22,8],[25,12],[18,7],[29,7],[21,11],[5,16],[7,18],[3,22],[7,24],[15,17],[16,19],[13,22],[16,24],[22,17],[25,19],[28,22],[29,25],[14,28],[15,29]],
@@ -484,6 +537,7 @@ function spawnEnemies(){
 }
 
 function spawnPickups(){
+  if (currentLevel === 'tutorial') { spawnTutorialPickups(); return; }
   pickups=[];
   for(const[x,y] of [[4,4],[12,10],[8,20],[24,22],[14,14],[28,15],[6,28]])
     if(getMap(x,y)===0) pickups.push({type:'health',x:x+0.5,y:y+0.5,amount:50,alive:true});
@@ -494,17 +548,249 @@ function spawnPickups(){
 }
 
 // ============================================================================
+//  AI TEAMMATES & SQUAD SYSTEM
+// ============================================================================
+let allies = [];
+let squadCommand = 'follow';
+let squadCommandTimer = 0;
+let squadCommandLabel = '';
+let lastVoiceCommand = '';
+let voiceCommandTimer = 0;
+
+const ALLY_NAMES = ['SGT. JOHNSON', 'CPL. CHEN', 'PVT. HAYES'];
+
+function createAlly(name, x, y) {
+  return {
+    name, x, y, health: 100, maxHealth: 100, alive: true,
+    angle: 0, speed: 2.2, fireTimer: 0, fireRate: 0.6,
+    state: 'follow', target: null, size: 0.5, animFrame: 0, animTimer: 0,
+    coverTimer: 0, healCooldown: 0
+  };
+}
+
+function spawnAllies() {
+  allies = [];
+  const positions = [[3.5, 2.5], [2.5, 3.5], [3.5, 3.5]];
+  for (let i = 0; i < 3; i++) {
+    allies.push(createAlly(ALLY_NAMES[i], positions[i][0], positions[i][1]));
+  }
+}
+
+function issueSquadCommand(cmd) {
+  squadCommand = cmd;
+  squadCommandTimer = 3;
+  const labels = {
+    attack: 'ATTACK!', retreat: 'RETREAT!', medic: 'MEDIC!',
+    cover: 'COVER ME!', follow: 'FOLLOW ME!', hold: 'HOLD POSITION!', spread: 'SPREAD OUT!'
+  };
+  squadCommandLabel = labels[cmd] || cmd.toUpperCase();
+  lastVoiceCommand = squadCommandLabel;
+  voiceCommandTimer = 3;
+  playSound('pickup');
+  for (const a of allies) {
+    if (!a.alive) continue;
+    a.state = cmd;
+    if (cmd === 'medic') a.healCooldown = 0;
+    if (cmd === 'cover') a.coverTimer = 0;
+  }
+}
+
+function updateAllies(dt) {
+  squadCommandTimer = Math.max(0, squadCommandTimer - dt);
+  for (const a of allies) {
+    if (!a.alive) continue;
+    a.animTimer += dt;
+    if (a.animTimer > 0.25) { a.animFrame = (a.animFrame + 1) % 4; a.animTimer = 0; }
+    const dx = player.x - a.x, dy = player.y - a.y;
+    const distToPlayer = Math.sqrt(dx * dx + dy * dy);
+    let nearestEnemy = null, nearestDist = Infinity;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const ed = Math.sqrt((e.x - a.x) ** 2 + (e.y - a.y) ** 2);
+      if (ed < nearestDist && ed < 15) { nearestDist = ed; nearestEnemy = e; }
+    }
+    switch (a.state) {
+      case 'follow': {
+        if (distToPlayer > 3) {
+          const mx = (dx / distToPlayer) * a.speed * dt;
+          const my = (dy / distToPlayer) * a.speed * dt;
+          if (canMove(a.x + mx, a.y + my, 0.3)) { a.x += mx; a.y += my; }
+          else if (canMove(a.x + mx, a.y, 0.3)) a.x += mx;
+          else if (canMove(a.x, a.y + my, 0.3)) a.y += my;
+        }
+        if (nearestEnemy && nearestDist < 12 && lineOfSight(a.x, a.y, nearestEnemy.x, nearestEnemy.y)) {
+          a.angle = Math.atan2(nearestEnemy.y - a.y, nearestEnemy.x - a.x);
+          allyFire(a, nearestEnemy, dt);
+        } else { a.angle = Math.atan2(dy, dx); }
+        break;
+      }
+      case 'attack': {
+        if (nearestEnemy) {
+          const edx = nearestEnemy.x - a.x, edy = nearestEnemy.y - a.y;
+          a.angle = Math.atan2(edy, edx);
+          if (nearestDist > 4) {
+            const mx = (edx / nearestDist) * a.speed * 1.3 * dt;
+            const my = (edy / nearestDist) * a.speed * 1.3 * dt;
+            if (canMove(a.x + mx, a.y + my, 0.3)) { a.x += mx; a.y += my; }
+            else if (canMove(a.x + mx, a.y, 0.3)) a.x += mx;
+            else if (canMove(a.x, a.y + my, 0.3)) a.y += my;
+          }
+          if (lineOfSight(a.x, a.y, nearestEnemy.x, nearestEnemy.y)) allyFire(a, nearestEnemy, dt);
+        } else {
+          if (distToPlayer > 3) {
+            const mx = (dx / distToPlayer) * a.speed * dt;
+            const my = (dy / distToPlayer) * a.speed * dt;
+            if (canMove(a.x + mx, a.y + my, 0.3)) { a.x += mx; a.y += my; }
+          }
+          a.angle = Math.atan2(dy, dx);
+        }
+        break;
+      }
+      case 'retreat': {
+        if (distToPlayer > 2) {
+          const mx = (dx / distToPlayer) * a.speed * 1.2 * dt;
+          const my = (dy / distToPlayer) * a.speed * 1.2 * dt;
+          if (canMove(a.x + mx, a.y + my, 0.3)) { a.x += mx; a.y += my; }
+          else if (canMove(a.x + mx, a.y, 0.3)) a.x += mx;
+          else if (canMove(a.x, a.y + my, 0.3)) a.y += my;
+        }
+        if (nearestEnemy && nearestDist < 8 && lineOfSight(a.x, a.y, nearestEnemy.x, nearestEnemy.y)) {
+          a.angle = Math.atan2(nearestEnemy.y - a.y, nearestEnemy.x - a.x);
+          allyFire(a, nearestEnemy, dt);
+        } else { a.angle = Math.atan2(dy, dx); }
+        break;
+      }
+      case 'cover': {
+        a.coverTimer += dt;
+        if (nearestEnemy) {
+          const midX = (player.x + nearestEnemy.x) / 2;
+          const midY = (player.y + nearestEnemy.y) / 2;
+          const toMidDist = Math.sqrt((midX - a.x) ** 2 + (midY - a.y) ** 2);
+          if (toMidDist > 1.5) {
+            const mx = ((midX - a.x) / toMidDist) * a.speed * dt;
+            const my = ((midY - a.y) / toMidDist) * a.speed * dt;
+            if (canMove(a.x + mx, a.y + my, 0.3)) { a.x += mx; a.y += my; }
+            else if (canMove(a.x + mx, a.y, 0.3)) a.x += mx;
+            else if (canMove(a.x, a.y + my, 0.3)) a.y += my;
+          }
+          a.angle = Math.atan2(nearestEnemy.y - a.y, nearestEnemy.x - a.x);
+          if (lineOfSight(a.x, a.y, nearestEnemy.x, nearestEnemy.y)) allyFire(a, nearestEnemy, dt);
+        } else {
+          if (distToPlayer > 2.5) {
+            const mx = (dx / distToPlayer) * a.speed * dt;
+            const my = (dy / distToPlayer) * a.speed * dt;
+            if (canMove(a.x + mx, a.y + my, 0.3)) { a.x += mx; a.y += my; }
+          }
+          a.angle = Math.atan2(dy, dx);
+        }
+        break;
+      }
+      case 'hold': {
+        if (nearestEnemy && nearestDist < 12 && lineOfSight(a.x, a.y, nearestEnemy.x, nearestEnemy.y)) {
+          a.angle = Math.atan2(nearestEnemy.y - a.y, nearestEnemy.x - a.x);
+          allyFire(a, nearestEnemy, dt);
+        }
+        break;
+      }
+      case 'medic': {
+        a.healCooldown = Math.max(0, a.healCooldown - dt);
+        if (distToPlayer > 1.5) {
+          const mx = (dx / distToPlayer) * a.speed * 1.5 * dt;
+          const my = (dy / distToPlayer) * a.speed * 1.5 * dt;
+          if (canMove(a.x + mx, a.y + my, 0.3)) { a.x += mx; a.y += my; }
+          else if (canMove(a.x + mx, a.y, 0.3)) a.x += mx;
+          else if (canMove(a.x, a.y + my, 0.3)) a.y += my;
+        }
+        a.angle = Math.atan2(dy, dx);
+        if (distToPlayer < 2 && a.healCooldown <= 0 && player.health < player.maxHealth) {
+          player.health = Math.min(player.maxHealth, player.health + 10);
+          a.healCooldown = 3;
+          playSound('pickup');
+          for (let i = 0; i < 5; i++) spawnParticle(player.x, player.y, 0.5, (Math.random()-0.5)*2, (Math.random()-0.5)*2, Math.random()*2, [50,255,100], 0.4, 2);
+        }
+        if (nearestEnemy && nearestDist < 6 && lineOfSight(a.x, a.y, nearestEnemy.x, nearestEnemy.y)) {
+          allyFire(a, nearestEnemy, dt);
+        }
+        break;
+      }
+      case 'spread': {
+        let pushX = 0, pushY = 0;
+        for (const other of allies) {
+          if (!other.alive || other === a) continue;
+          const odx = a.x - other.x, ody = a.y - other.y;
+          const od = Math.sqrt(odx*odx + ody*ody);
+          if (od < 4 && od > 0.1) { pushX += (odx/od) * 2; pushY += (ody/od) * 2; }
+        }
+        if (distToPlayer < 4 && distToPlayer > 0.1) {
+          pushX += (-dx/distToPlayer) * 1.5; pushY += (-dy/distToPlayer) * 1.5;
+        }
+        const pushD = Math.sqrt(pushX*pushX + pushY*pushY);
+        if (pushD > 0.1) {
+          const mx = (pushX/pushD) * a.speed * 0.8 * dt;
+          const my = (pushY/pushD) * a.speed * 0.8 * dt;
+          if (canMove(a.x + mx, a.y + my, 0.3)) { a.x += mx; a.y += my; }
+        }
+        if (nearestEnemy && nearestDist < 12 && lineOfSight(a.x, a.y, nearestEnemy.x, nearestEnemy.y)) {
+          a.angle = Math.atan2(nearestEnemy.y - a.y, nearestEnemy.x - a.x);
+          allyFire(a, nearestEnemy, dt);
+        }
+        break;
+      }
+    }
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const p = projectiles[i];
+      if (p.owner !== 'enemy') continue;
+      const pdx = p.x - a.x, pdy = p.y - a.y;
+      if (pdx * pdx + pdy * pdy < 0.4) {
+        a.health -= p.damage;
+        projectiles.splice(i, 1);
+        for (let j = 0; j < 3; j++) spawnParticle(a.x, a.y, 0.5, (Math.random()-0.5)*3, (Math.random()-0.5)*3, Math.random()*2, [50,200,50], 0.3, 2);
+        if (a.health <= 0) { a.alive = false; }
+        break;
+      }
+    }
+  }
+}
+
+function allyFire(ally, target, dt) {
+  ally.fireTimer -= dt;
+  if (ally.fireTimer <= 0) {
+    ally.fireTimer = ally.fireRate + Math.random() * 0.3;
+    const angle = Math.atan2(target.y - ally.y, target.x - ally.x) + (Math.random() - 0.5) * 0.08;
+    projectiles.push({
+      x: ally.x, y: ally.y, z: 0.3,
+      vx: Math.cos(angle) * 8, vy: Math.sin(angle) * 8,
+      damage: 12, color: [80, 255, 80], life: 2, owner: 'ally'
+    });
+    playSound('shoot');
+    for (let i = 0; i < 2; i++) spawnParticle(ally.x, ally.y, 0.3, Math.cos(angle)*2+Math.random(), Math.sin(angle)*2+Math.random(), Math.random(), [80,255,80], 0.12, 1.5);
+  }
+}
+
+// ============================================================================
 //  HAND GESTURE CONTROL SYSTEM
 // ============================================================================
 let handControlActive = false;
 let mpHands = null;
+let mpFaceMesh = null;
 const gestureInput = {
   moveX:0, moveY:0, lookX:0, lookY:0,
   fire:false, reload:false, interact:false, sprint:false, weapon:-1,
-  leftDetected:false, rightDetected:false, gestureLabel:''
+  leftDetected:false, rightDetected:false, gestureLabel:'',
+  headDetected:false, headX:0, headY:0, headTurnX:0, headTurnY:0,
+  throwGrenade:false,
+  stopSign:false
 };
 let smoothLookX=0, smoothLookY=0, smoothMoveX=0, smoothMoveY=0;
+let smoothHeadX=0, smoothHeadY=0, smoothHeadTurnX=0, smoothHeadTurnY=0;
 let lastGestureFire = false;
+let headBaseX=0.5, headBaseY=0.4, headCalibrated=false, headCalibFrames=0;
+let prevRightWristY = null, throwCooldown = 0;
+let liveGrenades = [];
+let currentLevel = 'tutorial';
+let tutorialStep = 0;
+let tutorialTimer = 0;
+let tutorialArrowTarget = null;
 
 function isFingerUp(lm, finger) {
   const tips={thumb:4,index:8,middle:12,ring:16,pinky:20};
@@ -540,26 +826,46 @@ function onHandResults(results) {
   gestureInput.rightDetected = !!rightLM;
   let labels = [];
 
-  // LEFT HAND → Movement
-  if(leftLM) {
-    const wrist=leftLM[0];
-    const rawMX = (wrist.x-0.5)*-2.5;
-    const rawMY = (wrist.y-0.5)*-2.5;
-    const deadZone = 0.2;
-    gestureInput.moveX = Math.abs(rawMX)<deadZone ? 0 : rawMX;
-    gestureInput.moveY = Math.abs(rawMY)<deadZone ? 0 : rawMY;
-
-    const fingers = countFingers(leftLM);
-    gestureInput.sprint = (fingers === 0);
-    if(fingers === 1) { gestureInput.weapon = 0; labels.push('W1'); }
-    else if(fingers === 2) { gestureInput.weapon = 1; labels.push('W2'); }
-    else if(fingers === 3) { gestureInput.weapon = 2; labels.push('W3'); }
-    else gestureInput.weapon = -1;
-    if(gestureInput.sprint) labels.push('SPRINT');
-    labels.push('MOVE');
-  } else {
-    gestureInput.moveX=0; gestureInput.moveY=0; gestureInput.sprint=false; gestureInput.weapon=-1;
+  // Detect STOP SIGN on either hand (open palm, all fingers spread, palm facing camera)
+  function isStopSign(lm) {
+    const allUp = countFingers(lm) >= 4 && isFingerUp(lm, 'thumb');
+    if (!allUp) return false;
+    // Check palm is relatively flat/facing camera: fingertips roughly same x-spread
+    const wrist = lm[0], middle = lm[12];
+    const palmHeight = Math.abs(wrist.y - middle.y);
+    return palmHeight > 0.12; // hand is upright, fingers pointing up = stop sign
   }
+
+  // Check for stop sign on ANY detected hand
+  gestureInput.stopSign = false;
+  if (leftLM && isStopSign(leftLM)) { gestureInput.stopSign = true; labels.push('🛑 STOP'); }
+  if (rightLM && isStopSign(rightLM)) { gestureInput.stopSign = true; if(!labels.includes('🛑 STOP')) labels.push('🛑 STOP'); }
+
+  // LEFT HAND → Grenade only (movement is now face-driven)
+  if(leftLM) {
+    gestureInput.leftDetected = true;
+    const fingers = countFingers(leftLM);
+    const thumbUp = isFingerUp(leftLM, 'thumb');
+    gestureInput.weapon = -1;
+    gestureInput.sprint = false;
+    // Fist = sprint boost (when moving via face)
+    if (fingers === 0 && !thumbUp) {
+      gestureInput.sprint = true;
+      labels.push('SPRINT');
+    }
+    // Open palm on left = throw grenade (only if NOT stop sign, so we differentiate)
+    // Grenade: quick open-close. Stop sign: hold still with hand up.
+    // Use: left hand open palm while right hand is also detected = grenade (not stop)
+    if (fingers >= 4 && thumbUp && throwCooldown <= 0 && !gestureInput.stopSign) {
+      gestureInput.throwGrenade = true;
+      throwCooldown = 1.5;
+      labels.push('🧨THROW');
+    }
+  } else {
+    gestureInput.sprint=false; gestureInput.weapon=-1;
+  }
+  // Face movement values are set in onFaceResults, not here
+  gestureInput.moveX = 0; gestureInput.moveY = 0;
 
   // RIGHT HAND → Aim & Actions
   if(rightLM) {
@@ -587,6 +893,44 @@ function onHandResults(results) {
 
   gestureInput.gestureLabel = labels.join(' | ');
   drawCamPreview(results);
+}
+
+function onFaceResults(results) {
+  if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+    const lm = results.multiFaceLandmarks[0];
+    gestureInput.headDetected = true;
+    const nose = lm[1];
+    // Calibrate head center position over first 30 frames
+    if (!headCalibrated) {
+      headCalibFrames++;
+      headBaseX = headBaseX * 0.9 + nose.x * 0.1;
+      headBaseY = headBaseY * 0.9 + nose.y * 0.1;
+      if (headCalibFrames > 30) headCalibrated = true;
+    }
+    // FACE TILT = MOVEMENT DIRECTION
+    // Use forehead-to-chin pitch angle for forward/back (tilt head forward = walk forward)
+    const forehead = lm[10], chin = lm[152];
+    const leftTemple = lm[234], rightTemple = lm[454];
+    const faceHeight = Math.abs(chin.y - forehead.y) + 0.01;
+    const faceWidth = Math.abs(rightTemple.x - leftTemple.x) + 0.01;
+    // Pitch: when you tilt forward, chin moves down (larger y) relative to forehead
+    // facePitch > 0 means tilting forward
+    const facePitchRaw = (chin.x - forehead.x); // horizontal offset = tilt forward/back sign
+    const facePitch = (nose.y - headBaseY) * 5.0; // positive when head goes down (tilting forward)
+    // Strafe: face position left/right of calibrated center
+    const faceStrafe = (nose.x - headBaseX) * -5.0;
+    gestureInput.headX = faceStrafe;
+    gestureInput.headY = facePitch; // POSITIVE = tilted forward = walk forward
+    // Head turn → look/aim direction
+    const faceCenterX = (leftTemple.x + rightTemple.x) / 2;
+    gestureInput.headTurnX = (nose.x - faceCenterX) / faceWidth * -3.0;
+    const faceMidY = (forehead.y + chin.y) / 2;
+    gestureInput.headTurnY = (nose.y - faceMidY) / faceHeight * -2.0;
+  } else {
+    gestureInput.headDetected = false;
+    gestureInput.headX = 0; gestureInput.headY = 0;
+    gestureInput.headTurnX = 0; gestureInput.headTurnY = 0;
+  }
 }
 
 function drawCamPreview(results) {
@@ -620,9 +964,32 @@ function drawCamPreview(results) {
   camCtx.strokeStyle='rgba(255,255,255,0.15)'; camCtx.lineWidth=1;
   camCtx.beginPath(); camCtx.arc(camCvs.width/2, camCvs.height/2, 15, 0, Math.PI*2); camCtx.stroke();
 
+  // Draw head tracking indicator
+  if (gestureInput.headDetected) {
+    const hx = camCvs.width/2 + gestureInput.headX * -12;
+    const hy = camCvs.height/2 + gestureInput.headY * -12;
+    camCtx.strokeStyle = 'rgba(255,200,60,0.7)'; camCtx.lineWidth = 2;
+    camCtx.beginPath(); camCtx.arc(hx, hy, 18, 0, Math.PI*2); camCtx.stroke();
+    camCtx.strokeStyle = 'rgba(255,200,60,0.3)'; camCtx.lineWidth = 1;
+    camCtx.beginPath(); camCtx.moveTo(hx-8,hy); camCtx.lineTo(hx+8,hy); camCtx.moveTo(hx,hy-8); camCtx.lineTo(hx,hy+8); camCtx.stroke();
+    camCtx.fillStyle='rgba(255,200,60,0.5)'; camCtx.font='bold 8px monospace'; camCtx.textAlign='center';
+    camCtx.fillText('HEAD', hx, hy+28);
+  }
+
   // Update gesture label
   const labelEl = document.getElementById('gesture-label');
-  labelEl.textContent = gestureInput.gestureLabel || (gestureInput.leftDetected||gestureInput.rightDetected?'':'NO HANDS');
+  let statusText = gestureInput.gestureLabel || (gestureInput.leftDetected||gestureInput.rightDetected?'':'NO HANDS');
+  if (gestureInput.headDetected) statusText = 'HEAD ' + (headCalibrated?'OK':'CAL') + (statusText?' | ':' ') + statusText;
+  labelEl.textContent = statusText;
+
+  // Also draw to overlay preview if visible
+  const overlayPrev = document.getElementById('overlay-cam-preview');
+  const overlayWrap = document.getElementById('overlay-preview-wrap');
+  if(overlayWrap && overlayWrap.style.display === 'flex') {
+    const oCtx = overlayPrev.getContext('2d');
+    oCtx.drawImage(camCvs, 0, 0, overlayPrev.width, overlayPrev.height);
+    document.getElementById('overlay-gesture-label').textContent = statusText;
+  }
 }
 
 async function enumerateCameras() {
@@ -647,9 +1014,14 @@ async function enumerateCameras() {
   });
 }
 
-async function initHandTracking() {
+let previewActive = false;
+
+async function startOverlayPreview() {
   const statusEl = document.getElementById('cam-status');
-  statusEl.textContent = 'Requesting camera access...';
+  const btn = document.getElementById('btn-preview-cam');
+  if(previewActive) return; // already running
+  statusEl.textContent = 'Starting camera preview...';
+  btn.textContent = 'Loading...';
   try {
     const selectedId = document.getElementById('cam-selector').value;
     const videoConstraints = selectedId
@@ -670,26 +1042,179 @@ async function initHandTracking() {
       minDetectionConfidence: 0.65, minTrackingConfidence: 0.5
     });
     mpHands.onResults(onHandResults);
-
-    // Wait for model to load by sending first frame
     await mpHands.send({image: video});
+
+    statusEl.textContent = 'Loading face tracking model...';
+    mpFaceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    });
+    mpFaceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+    mpFaceMesh.onResults(onFaceResults);
+    await mpFaceMesh.send({image: video});
+
+    handControlActive = true;
+    previewActive = true;
+    headCalibrated = false; headCalibFrames = 0;
 
     // Start tracking loop at ~15fps
     setInterval(() => {
       if(video.readyState >= 2 && handControlActive) {
         mpHands.send({image: video});
+        mpFaceMesh.send({image: video});
+      }
+    }, 66);
+
+    document.getElementById('cam-preview').style.display = 'block';
+    document.getElementById('gesture-label').style.display = 'block';
+    document.getElementById('overlay-preview-wrap').style.display = 'flex';
+    btn.textContent = '\u2705 Camera Active';
+    btn.classList.add('active');
+    statusEl.textContent = 'Hand tracking active — try moving your hands!';
+  } catch(err) {
+    statusEl.textContent = 'Camera failed: ' + err.message;
+    btn.textContent = '\uD83D\uDCF9 Preview Camera';
+  }
+}
+
+async function initHandTracking() {
+  const statusEl = document.getElementById('cam-status');
+  // If preview was already started, just return success
+  if(previewActive && handControlActive) {
+    document.getElementById('overlay-preview-wrap').style.display = 'none';
+    statusEl.textContent = '';
+    return true;
+  }
+  statusEl.textContent = 'Requesting camera & microphone access...';
+  try {
+    const selectedId = document.getElementById('cam-selector').value;
+    const videoConstraints = selectedId
+      ? { deviceId: { exact: selectedId }, width:{ideal:640}, height:{ideal:480} }
+      : { width:{ideal:640}, height:{ideal:480}, facingMode:'user' };
+    // Request BOTH video and audio in one prompt so browser combines permission dialog
+    const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: true });
+    const video = document.getElementById('camera-feed');
+    // Only the video tracks go to the video element
+    const videoOnlyStream = new MediaStream(stream.getVideoTracks());
+    video.srcObject = videoOnlyStream;
+    // Stop audio tracks now — SpeechRecognition will manage its own mic access later
+    stream.getAudioTracks().forEach(t => t.stop());
+    await video.play();
+
+    statusEl.textContent = 'Loading hand tracking model...';
+
+    mpHands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+    mpHands.setOptions({
+      maxNumHands: 2, modelComplexity: 1,
+      minDetectionConfidence: 0.65, minTrackingConfidence: 0.5
+    });
+    mpHands.onResults(onHandResults);
+
+    // Wait for model to load by sending first frame
+    await mpHands.send({image: video});
+
+    statusEl.textContent = 'Loading face tracking model...';
+    mpFaceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    });
+    mpFaceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+    mpFaceMesh.onResults(onFaceResults);
+    await mpFaceMesh.send({image: video});
+    headCalibrated = false; headCalibFrames = 0;
+
+    // Start tracking loop at ~15fps
+    setInterval(() => {
+      if(video.readyState >= 2 && handControlActive) {
+        mpHands.send({image: video});
+        mpFaceMesh.send({image: video});
       }
     }, 66);
 
     handControlActive = true;
     document.getElementById('cam-preview').style.display = 'block';
     document.getElementById('gesture-label').style.display = 'block';
+    document.getElementById('overlay-preview-wrap').style.display = 'none';
     statusEl.textContent = '';
     return true;
   } catch(err) {
     statusEl.textContent = 'Camera failed: ' + err.message + ' — Falling back to keyboard';
     console.warn('Camera init failed:', err);
     return false;
+  }
+}
+
+// ============================================================================
+//  VOICE CONTROL SYSTEM
+// ============================================================================
+let voiceActive = false;
+let voiceRecognition = null;
+
+const VOICE_COMMANDS = {
+  'assault rifle': () => { player.weapon = 0; lastVoiceCommand = 'ASSAULT RIFLE'; voiceCommandTimer = 2; playSound('pickup'); },
+  'rifle': () => { player.weapon = 0; lastVoiceCommand = 'ASSAULT RIFLE'; voiceCommandTimer = 2; playSound('pickup'); },
+  'pistol': () => { player.weapon = 1; lastVoiceCommand = 'PISTOL'; voiceCommandTimer = 2; playSound('pickup'); },
+  'shotgun': () => { player.weapon = 2; lastVoiceCommand = 'SHOTGUN'; voiceCommandTimer = 2; playSound('pickup'); },
+  'reload': () => { startReload(); lastVoiceCommand = 'RELOAD'; voiceCommandTimer = 2; },
+  'grenade': () => { gestureInput.throwGrenade = true; lastVoiceCommand = '🧨 GRENADE'; voiceCommandTimer = 2; },
+  'throw': () => { gestureInput.throwGrenade = true; lastVoiceCommand = '🧨 THROW'; voiceCommandTimer = 2; },
+  'cover me': () => { issueSquadCommand('cover'); },
+  'follow me': () => { issueSquadCommand('follow'); },
+  'hold position': () => { issueSquadCommand('hold'); },
+  'spread out': () => { issueSquadCommand('spread'); },
+  'attack': () => { issueSquadCommand('attack'); },
+  'retreat': () => { issueSquadCommand('retreat'); },
+  'medic': () => { issueSquadCommand('medic'); },
+  'follow': () => { issueSquadCommand('follow'); },
+  'hold': () => { issueSquadCommand('hold'); },
+};
+
+async function initVoice() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { console.warn('Speech recognition not supported'); return; }
+  // Explicitly request microphone permission so the browser prompts
+  try {
+    const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Stop the stream tracks - SpeechRecognition manages its own mic access
+    micStream.getTracks().forEach(t => t.stop());
+  } catch (err) {
+    console.warn('Microphone permission denied:', err.message);
+    return;
+  }
+  voiceRecognition = new SR();
+  voiceRecognition.continuous = true;
+  voiceRecognition.interimResults = false;
+  voiceRecognition.lang = 'en-US';
+  voiceRecognition.onresult = (event) => {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        const transcript = event.results[i][0].transcript.trim().toLowerCase();
+        processVoiceCommand(transcript);
+      }
+    }
+  };
+  voiceRecognition.onerror = (e) => { if (e.error !== 'no-speech') console.warn('Voice error:', e.error); };
+  voiceRecognition.onend = () => { if (voiceActive && gameRunning) voiceRecognition.start(); };
+  voiceActive = true;
+  voiceRecognition.start();
+}
+
+function processVoiceCommand(transcript) {
+  const sorted = Object.keys(VOICE_COMMANDS).sort((a,b) => b.length - a.length);
+  for (const cmd of sorted) {
+    if (transcript.includes(cmd)) {
+      VOICE_COMMANDS[cmd]();
+      return;
+    }
+  }
+}
+
+function startReload() {
+  const w = player.weapons[player.weapon];
+  if (!player.reloading && w.reserve > 0 && w.ammo < w.maxAmmo) {
+    player.reloading = true;
+    player.reloadTimer = 1.5;
+    playSound('reload');
   }
 }
 
@@ -826,7 +1351,9 @@ function renderSprites(){
   const spriteList=[];
   for(const e of enemies){if(!e.alive) continue;const dx=e.x-player.x,dy=e.y-player.y;spriteList.push({x:e.x,y:e.y,dist:Math.sqrt(dx*dx+dy*dy),type:'enemy',ref:e});}
   for(const p of pickups){if(!p.alive) continue;const dx=p.x-player.x,dy=p.y-player.y;spriteList.push({x:p.x,y:p.y,dist:Math.sqrt(dx*dx+dy*dy),type:'pickup',ref:p});}
+  for(const a of allies){if(!a.alive) continue;const dx=a.x-player.x,dy=a.y-player.y;spriteList.push({x:a.x,y:a.y,dist:Math.sqrt(dx*dx+dy*dy),type:'ally',ref:a});}
   for(const p of projectiles){const dx=p.x-player.x,dy=p.y-player.y;spriteList.push({x:p.x,y:p.y,dist:Math.sqrt(dx*dx+dy*dy),type:'proj',ref:p});}
+  for(const g of liveGrenades){const dx=g.x-player.x,dy=g.y-player.y;spriteList.push({x:g.x,y:g.y,dist:Math.sqrt(dx*dx+dy*dy),type:'grenade',ref:g});}
   spriteList.sort((a,b)=>b.dist-a.dist);
 
   for(const spr of spriteList){
@@ -838,7 +1365,9 @@ function renderSprites(){
     const[lr,lg,lb]=getLightAt(spr.x,spr.y);
     const fogF=1-Math.exp(-spr.dist*0.08);
     if(spr.type==='enemy') renderEnemy(spr.ref,screenX,spr.dist,halfH,pitchOff,lr,lg,lb,fogF);
+    else if(spr.type==='ally') renderAlly(spr.ref,screenX,spr.dist,halfH,pitchOff,lr,lg,lb,fogF);
     else if(spr.type==='pickup') renderPickup(spr.ref,screenX,spr.dist,halfH,pitchOff,lr,lg,lb,fogF);
+    else if(spr.type==='grenade') renderGrenade(spr.ref,screenX,spr.dist,halfH,pitchOff,fogF);
     else renderProjectile(spr.ref,screenX,spr.dist,halfH,pitchOff,fogF);
   }
 }
@@ -1111,6 +1640,82 @@ function renderEnemy(e, screenX, dist, halfH, pitchOff, lr, lg, lb, fogF) {
   }
 }
 
+function renderAlly(a, screenX, dist, halfH, pitchOff, lr, lg, lb, fogF) {
+  const sprH = Math.floor((RENDER_H / dist) * a.size);
+  if (sprH < 2) return;
+  const sprW = Math.floor(sprH * 0.7);
+  const startX = Math.floor(screenX - sprW/2);
+  const startY = Math.floor(halfH - sprH/2 + pitchOff);
+  const walkBob = a.state !== 'hold' ? Math.sin(gameTime*7+a.x*5)*0.02 : 0;
+  for (let sy = 0; sy < sprH; sy++) {
+    for (let sx = 0; sx < sprW; sx++) {
+      const px = startX + sx, py = startY + sy;
+      if (px < 0 || px >= RENDER_W || py < 0 || py >= RENDER_H) continue;
+      if (dist > zBuffer[px]) continue;
+      const nx = (sx / sprW - 0.5) * 2;
+      const ny = (sy / sprH - 0.5) * 2 + walkBob;
+      let r = 0, g = 0, b = 0, draw = false;
+      // Helmet
+      if (ny < -0.25 && ny > -0.55 && Math.abs(nx) < 0.3) {
+        draw = true;
+        const nz = Math.sqrt(Math.max(0, 1 - (nx/0.3)**2 - ((ny+0.4)/0.2)**2));
+        const shade = Math.max(0.3, nz*0.5+0.5);
+        r = 60*shade; g = 80*shade; b = 50*shade;
+        if (ny > -0.45 && ny < -0.32 && Math.abs(nx) < 0.18) {
+          const vGlow = 0.7+Math.sin(gameTime*2)*0.3;
+          r = 40*vGlow; g = 180*vGlow; b = 220*vGlow;
+        }
+      }
+      // Neck
+      else if (ny < -0.15 && ny > -0.25 && Math.abs(nx) < 0.12) {
+        draw = true; r = 140; g = 110; b = 80;
+      }
+      // Torso
+      else if (ny >= -0.15 && ny < 0.3) {
+        const widthAtY = 0.45 + ny*0.1;
+        if (Math.abs(nx) < widthAtY) {
+          draw = true;
+          const nz = Math.sqrt(Math.max(0, 1 - (nx/widthAtY)**2));
+          const shade = Math.max(0.25, nz*0.5+0.5);
+          r = 55*shade; g = 75*shade; b = 45*shade;
+          if (Math.abs(nx) < 0.2 && ny > -0.05 && ny < 0.15) { r = 70*shade; g = 90*shade; b = 55*shade; }
+          if (Math.abs(Math.sin(ny*18))<0.07) { r*=0.7; g*=0.7; b*=0.7; }
+        }
+      }
+      // Legs
+      else if (ny >= 0.3 && ny < 0.85) {
+        const legW = 0.15;
+        if ((nx > 0.04 && nx < 0.04+legW) || (nx < -0.04 && nx > -0.04-legW)) {
+          draw = true; r = 50; g = 65; b = 40;
+        }
+      }
+      // Weapon
+      if (ny > -0.1 && ny < 0.15 && nx > 0.2 && nx < 0.55) {
+        draw = true; r = 50; g = 55; b = 50;
+        if (nx > 0.48 && a.fireTimer > a.fireRate * 0.7) { r = 200; g = 255; b = 100; }
+      }
+      // Name tag
+      if (ny < -0.65 && ny > -0.72 && Math.abs(nx) < 0.35) {
+        draw = true; r = 40; g = 200; b = 80;
+      }
+      // Health bar
+      if (ny < -0.58 && ny > -0.64 && Math.abs(nx) < 0.35) {
+        draw = true;
+        const hpPct = a.health / a.maxHealth;
+        if ((nx + 0.35) / 0.7 < hpPct) { r = hpPct > 0.5 ? 50 : 255; g = hpPct > 0.5 ? 255 : 50; b = 50; }
+        else { r = 20; g = 8; b = 8; }
+      }
+      if (draw) {
+        r=r*lr; g=g*lg; b=b*lb;
+        r=r*(1-fogF)+8*fogF; g=g*(1-fogF)+5*fogF; b=b*(1-fogF)+18*fogF;
+        const pi=(py*RENDER_W+px)*4;
+        buf[pi]=Math.max(0,Math.min(255,r|0)); buf[pi+1]=Math.max(0,Math.min(255,g|0));
+        buf[pi+2]=Math.max(0,Math.min(255,b|0));
+      }
+    }
+  }
+}
+
 function renderPickup(p,screenX,dist,halfH,pitchOff,lr,lg,lb,fogF){
   const sprH=Math.floor((RENDER_H/dist)*0.35); if(sprH<2) return;
   const startX=Math.floor(screenX-sprH/2);
@@ -1130,6 +1735,24 @@ function renderPickup(p,screenX,dist,halfH,pitchOff,lr,lg,lb,fogF){
       r=r*lr*(1-fogF)+8*fogF;g=g*lg*(1-fogF)+5*fogF;b=b*lb*(1-fogF)+18*fogF;
       const pi=(py*RENDER_W+px)*4;
       buf[pi]=Math.max(0,Math.min(255,r|0));buf[pi+1]=Math.max(0,Math.min(255,g|0));buf[pi+2]=Math.max(0,Math.min(255,b|0));
+    }
+  }}
+}
+
+function renderGrenade(g,screenX,dist,halfH,pitchOff,fogF){
+  const sprH=Math.floor((RENDER_H/dist)*0.15); if(sprH<2) return;
+  const zOff = g.z * RENDER_H / dist;
+  const startX=Math.floor(screenX-sprH/2),startY=Math.floor(halfH-sprH/2+pitchOff-zOff);
+  for(let sy=0;sy<sprH;sy++){for(let sx=0;sx<sprH;sx++){
+    const px=startX+sx,py=startY+sy;
+    if(px<0||px>=RENDER_W||py<0||py>=RENDER_H) continue;if(dist>zBuffer[px]) continue;
+    const nx2=(sx/sprH-0.5)*2,ny2=(sy/sprH-0.5)*2,d2=nx2*nx2+ny2*ny2;
+    if(d2<0.9){const glow2=Math.max(0,1-d2);
+      const flash=g.life<0.5?Math.abs(Math.sin(g.life*20)):0;
+      let r=60+flash*200,gc=120*glow2+flash*100,b=20;
+      r=r*(1-fogF)+8*fogF;gc=gc*(1-fogF)+5*fogF;b=b*(1-fogF)+18*fogF;
+      const pi=(py*RENDER_W+px)*4;
+      buf[pi]=Math.min(255,r|0);buf[pi+1]=Math.min(255,gc|0);buf[pi+2]=Math.min(255,b|0);
     }
   }}
 }
@@ -1155,6 +1778,57 @@ function renderProjectile(p,screenX,dist,halfH,pitchOff,fogF){
 //  PARTICLES
 // ============================================================================
 function spawnParticle(x,y,z,vx,vy,vz,color,life,size){if(particles.length>600) return;particles.push({x,y,z,vx,vy,vz,color,life,maxLife:life,size:size||1});}
+
+function updateLiveGrenades(dt) {
+  for (let i = liveGrenades.length - 1; i >= 0; i--) {
+    const g = liveGrenades[i];
+    g.x += g.vx * dt; g.y += g.vy * dt; g.z += g.vz * dt;
+    g.vz -= 8 * dt; // gravity
+    // Bounce off floor
+    if (g.z <= 0) { g.z = 0; g.vz = Math.abs(g.vz) * 0.3; g.vx *= 0.6; g.vy *= 0.6; g.bounced = true; }
+    // Bounce off walls
+    if (getMap(Math.floor(g.x), Math.floor(g.y)) > 0) { g.vx *= -0.5; g.vy *= -0.5; g.x += g.vx * dt * 2; g.y += g.vy * dt * 2; }
+    // Trail particles
+    spawnParticle(g.x, g.y, g.z, (Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5, Math.random()*0.5, [255, 200, 50], 0.2, 1);
+    g.life -= dt;
+    if (g.life <= 0) {
+      // EXPLODE!
+      playSound('explosion');
+      // Damage all enemies in blast radius
+      const blastRadius = 4.0;
+      for (const e of enemies) {
+        if (!e.alive) continue;
+        const edx = e.x - g.x, edy = e.y - g.y, eDist = Math.sqrt(edx*edx + edy*edy);
+        if (eDist < blastRadius) {
+          const dmg = 80 * (1 - eDist / blastRadius);
+          e.health -= dmg; e.hitFlash = 0.3; e.state = 'chase';
+          player.damageDealt += dmg;
+          if (e.health <= 0) { e.alive = false; player.kills++; playSound('enemy_die'); }
+        }
+      }
+      // Self-damage if too close
+      const pdx = player.x - g.x, pdy = player.y - g.y, pDist = Math.sqrt(pdx*pdx + pdy*pdy);
+      if (pDist < blastRadius) {
+        const selfDmg = 30 * (1 - pDist / blastRadius);
+        let dmg = selfDmg;
+        if (player.shield > 0) { const sd = Math.min(player.shield, dmg); player.shield -= sd; dmg -= sd; }
+        player.health -= dmg; player.damageFlash = 0.8; player.shieldRegenTimer = 0;
+      }
+      // Big explosion particles
+      for (let j = 0; j < 40; j++) {
+        const angle = Math.random() * Math.PI * 2, spd = 2 + Math.random() * 6;
+        const col = Math.random() > 0.5 ? [255, 150 + Math.random()*100|0, 0] : [255, 255, 100 + Math.random()*100|0];
+        spawnParticle(g.x, g.y, g.z + 0.2, Math.cos(angle)*spd, Math.sin(angle)*spd, 2 + Math.random()*4, col, 0.5 + Math.random()*0.5, 3);
+      }
+      // Smoke ring
+      for (let j = 0; j < 20; j++) {
+        const angle = Math.random() * Math.PI * 2, spd = 1 + Math.random() * 3;
+        spawnParticle(g.x, g.y, g.z, Math.cos(angle)*spd, Math.sin(angle)*spd, Math.random()*2, [80, 80, 80], 0.8 + Math.random()*0.4, 4);
+      }
+      liveGrenades.splice(i, 1);
+    }
+  }
+}
 
 function updateParticles(dt){for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.z+=p.vz*dt;p.vz-=4*dt;p.life-=dt;if(p.life<=0)particles.splice(i,1);}}
 
@@ -1193,10 +1867,19 @@ function lineOfSight(x1,y1,x2,y2){const dx=x2-x1,dy=y2-y1,dist=Math.sqrt(dx*dx+d
 function updatePlayer(dt) {
   // === LOOK / AIM ===
   if (handControlActive) {
-    smoothLookX = smoothLookX*0.6 + gestureInput.lookX*0.4;
-    smoothLookY = smoothLookY*0.6 + gestureInput.lookY*0.4;
-    player.angle += smoothLookX * 2.5 * dt;
-    player.pitch = Math.max(-0.5, Math.min(0.5, player.pitch + smoothLookY * 2.0 * dt));
+    smoothLookX = smoothLookX*0.4 + gestureInput.lookX*0.6;
+    smoothLookY = smoothLookY*0.4 + gestureInput.lookY*0.6;
+    let lookInputX = smoothLookX * 3.0;
+    let lookInputY = smoothLookY * 2.5;
+    // Head turn adds to look direction
+    if (gestureInput.headDetected && headCalibrated) {
+      smoothHeadTurnX = smoothHeadTurnX*0.5 + gestureInput.headTurnX*0.5;
+      smoothHeadTurnY = smoothHeadTurnY*0.5 + gestureInput.headTurnY*0.5;
+      lookInputX += smoothHeadTurnX * 1.8;
+      lookInputY += smoothHeadTurnY * 1.2;
+    }
+    player.angle += lookInputX * dt;
+    player.pitch = Math.max(-0.5, Math.min(0.5, player.pitch + lookInputY * dt));
   }
   if (!handControlActive || mouseLocked) {
     player.angle += mouseDX * 0.002;
@@ -1217,19 +1900,48 @@ function updatePlayer(dt) {
   if (keys['KeyA']||keys['ArrowLeft']) { mx+=Math.cos(player.angle-Math.PI/2); my+=Math.sin(player.angle-Math.PI/2); }
   if (keys['KeyD']||keys['ArrowRight']) { mx-=Math.cos(player.angle-Math.PI/2); my-=Math.sin(player.angle-Math.PI/2); }
 
-  // Gesture movement
-  if (handControlActive && gestureInput.leftDetected) {
-    smoothMoveX = smoothMoveX*0.5 + gestureInput.moveX*0.5;
-    smoothMoveY = smoothMoveY*0.5 + gestureInput.moveY*0.5;
-    // Forward/backward (hand up/down)
-    if (Math.abs(smoothMoveY) > 0.1) {
-      mx += Math.cos(player.angle) * smoothMoveY;
-      my += Math.sin(player.angle) * smoothMoveY;
+  // STOP SIGN = FREEZE — skip all gesture movement
+  const frozen = handControlActive && gestureInput.stopSign;
+
+  // FACE = PRIMARY MOVEMENT (tilt head forward = walk forward, lean left/right = strafe)
+  if (handControlActive && gestureInput.headDetected && headCalibrated && !frozen) {
+    // Fluid smoothing — high blend factor = responsive, slight smoothing = no jitter
+    smoothHeadX = smoothHeadX*0.15 + gestureInput.headX*0.85;
+    smoothHeadY = smoothHeadY*0.15 + gestureInput.headY*0.85;
+    const headDeadZone = 0.12;
+    // Forward/backward: tilt head forward (positive headY) = walk forward
+    if (Math.abs(smoothHeadY) > headDeadZone) {
+      const raw = smoothHeadY > 0 ? smoothHeadY - headDeadZone : smoothHeadY + headDeadZone;
+      // Quadratic ramp for fluid acceleration — small tilt = gentle, big tilt = fast
+      const sign = raw > 0 ? 1 : -1;
+      const fwd = sign * raw * raw * 0.8 + raw * 0.5;
+      mx += Math.cos(player.angle) * fwd * 1.4;
+      my += Math.sin(player.angle) * fwd * 1.4;
     }
-    // Strafe (hand left/right)
-    if (Math.abs(smoothMoveX) > 0.1) {
-      mx += Math.cos(player.angle-Math.PI/2) * smoothMoveX;
-      my += Math.sin(player.angle-Math.PI/2) * smoothMoveX;
+    // Strafe: lean face left/right
+    if (Math.abs(smoothHeadX) > headDeadZone) {
+      const raw = smoothHeadX > 0 ? smoothHeadX - headDeadZone : smoothHeadX + headDeadZone;
+      const sign = raw > 0 ? 1 : -1;
+      const strafe = sign * raw * raw * 0.6 + raw * 0.4;
+      mx += Math.cos(player.angle-Math.PI/2) * strafe * 1.2;
+      my += Math.sin(player.angle-Math.PI/2) * strafe * 1.2;
+    }
+  }
+
+  // AIM ASSIST — gently pull aim toward nearest visible enemy
+  if (handControlActive) {
+    let closestAngleDiff = 0.35, closestEnemy = null;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const edx = e.x - player.x, edy = e.y - player.y, eDist = Math.sqrt(edx*edx + edy*edy);
+      if (eDist > 15 || eDist < 0.5) continue;
+      if (!lineOfSight(player.x, player.y, e.x, e.y)) continue;
+      let diff = Math.atan2(edy, edx) - player.angle;
+      while(diff > Math.PI) diff -= 2*Math.PI; while(diff < -Math.PI) diff += 2*Math.PI;
+      if (Math.abs(diff) < closestAngleDiff) { closestAngleDiff = Math.abs(diff); closestEnemy = { dx: edx, dy: edy, diff }; }
+    }
+    if (closestEnemy) {
+      player.angle += closestEnemy.diff * 2.0 * dt;
     }
   }
 
@@ -1308,6 +2020,29 @@ function updatePlayer(dt) {
     } else { playSound('no_ammo'); player.fireTimer=0.3; }
   }
 
+  // === GRENADES ===
+  player.grenadeTimer = Math.max(0, player.grenadeTimer - dt);
+  throwCooldown = Math.max(0, throwCooldown - dt);
+  if (gestureInput.throwGrenade) {
+    gestureInput.throwGrenade = false;
+    if (player.grenades > 0 && player.grenadeTimer <= 0) {
+      player.grenades--;
+      player.grenadeTimer = 1.0;
+      playSound('grenade_throw');
+      lastVoiceCommand = '🧨 GRENADE'; voiceCommandTimer = 1.5;
+      liveGrenades.push({
+        x: player.x + Math.cos(player.angle) * 0.5,
+        y: player.y + Math.sin(player.angle) * 0.5,
+        z: 0.4,
+        vx: Math.cos(player.angle) * 6,
+        vy: Math.sin(player.angle) * 6,
+        vz: 3.0,
+        life: 2.0,
+        bounced: false
+      });
+    }
+  }
+
   // === DOORS ===
   const wantInteract = keys['KeyE'] || (handControlActive && gestureInput.interact);
   if (wantInteract) tryOpenDoor();
@@ -1374,6 +2109,13 @@ function updateProjectiles(dt){
         player.health-=dmg;player.damageTaken+=p.damage;player.shieldRegenTimer=0;player.damageFlash=1;playSound('hit');
         for(let j=0;j<5;j++)spawnParticle(player.x,player.y,0.5,(Math.random()-0.5)*3,(Math.random()-0.5)*3,Math.random()*2,[255,50,50],0.3,2);
         projectiles.splice(i,1);if(player.health<=0)playerDeath();continue;}}
+    if(p.owner==='ally'){for(const e of enemies){if(!e.alive) continue;const adx=p.x-e.x,ady=p.y-e.y;
+      if(adx*adx+ady*ady<0.4){e.health-=p.damage;e.hitFlash=0.15;e.state='chase';playSound('hit');
+        for(let j=0;j<5;j++)spawnParticle(e.x,e.y,0.3,(Math.random()-0.5)*3,(Math.random()-0.5)*3,Math.random()*2,[80,255,80],0.3,2);
+        if(e.health<=0){e.alive=false;player.kills++;playSound('enemy_die');
+          for(let j=0;j<15;j++){const col=e.type==='grunt'?[200+Math.random()*55|0,100,0]:e.type==='elite'?[120,40,200+Math.random()*55|0]:[40,80,200+Math.random()*55|0];
+            spawnParticle(e.x,e.y,0.1+Math.random()*0.6,(Math.random()-0.5)*6,(Math.random()-0.5)*6,Math.random()*6,col,0.6+Math.random()*0.6,3);}}
+        projectiles.splice(i,1);break;}}}
     spawnParticle(p.x,p.y,0.3,(Math.random()-0.5)*0.3,(Math.random()-0.5)*0.3,0,p.color,0.12,1);
   }
 }
@@ -1435,13 +2177,109 @@ function renderHUD(){
   ctx.fillStyle=alive>0?'#f84':'#4f8';ctx.font='bold 11px "Segoe UI",sans-serif';ctx.textAlign='left';
   ctx.fillText('HOSTILES: '+alive,20,22);
 
-  // Gesture control indicator
+  // Grenade count
+  const grenX=RENDER_W-200, grenY=RENDER_H-110;
+  ctx.fillStyle='rgba(0,10,20,0.6)';roundRect(ctx,grenX,grenY,80,22,4);ctx.fill();
+  ctx.strokeStyle='rgba(200,160,0,0.3)';ctx.lineWidth=1;roundRect(ctx,grenX,grenY,80,22,4);ctx.stroke();
+  ctx.fillStyle=player.grenades>0?'#fd0':'#555';ctx.font='bold 12px "Segoe UI",sans-serif';ctx.textAlign='left';
+  ctx.fillText('\u{1F4A3} '+player.grenades+'/'+player.maxGrenades,grenX+8,grenY+16);
+
+  // ── INPUT STATUS BAR ──
   if(handControlActive){
-    const gy=RENDER_H-58;
-    ctx.fillStyle='rgba(0,20,10,0.5)';roundRect(ctx,RENDER_W/2-70,gy,140,16,3);ctx.fill();
-    ctx.fillStyle='#0f8';ctx.font='bold 10px monospace';ctx.textAlign='center';
+    const gy=RENDER_H-62;
+    const barW=200, barX=RENDER_W/2-barW/2;
+    ctx.fillStyle='rgba(0,15,10,0.6)';roundRect(ctx,barX,gy,barW,20,4);ctx.fill();
+    ctx.strokeStyle='rgba(0,180,80,0.25)';ctx.lineWidth=1;roundRect(ctx,barX,gy,barW,20,4);ctx.stroke();
     const hCount=(gestureInput.leftDetected?1:0)+(gestureInput.rightDetected?1:0);
-    ctx.fillText(`HANDS: ${hCount}/2 | CAM CTRL`,RENDER_W/2,gy+12);
+    const headOk=gestureInput.headDetected&&headCalibrated;
+    // Hands indicator
+    ctx.fillStyle=hCount>0?'#0f8':'#555';ctx.font='bold 9px monospace';ctx.textAlign='left';
+    ctx.fillText('\u270B '+hCount+'/2',barX+8,gy+14);
+    // Head indicator
+    ctx.fillStyle=headOk?'#fd0':gestureInput.headDetected?'#a80':'#555';
+    ctx.fillText('\u{1F9D1} '+(headOk?'HEAD':'---'),barX+58,gy+14);
+    // Mic indicator
+    ctx.fillStyle=voiceActive?'#4af':'#555';
+    const micAlpha=voiceActive?(0.7+Math.sin(gameTime*4)*0.3):0.4;
+    ctx.globalAlpha=micAlpha;
+    ctx.fillText('\u{1F3A4} '+(voiceActive?'MIC':'OFF'),barX+120,gy+14);
+    ctx.globalAlpha=1;
+    // Stop/frozen indicator
+    if(gestureInput.stopSign){
+      ctx.fillStyle='#f44';ctx.font='bold 10px monospace';
+      ctx.textAlign='center';
+      const freezePulse = 0.6+Math.sin(gameTime*6)*0.4;
+      ctx.globalAlpha=freezePulse;
+      ctx.fillText('\u{1F6D1} FROZEN',RENDER_W/2,gy-6);
+      ctx.globalAlpha=1;
+    }
+  }
+
+  // ── VOICE COMMAND CALLOUT ──
+  if(voiceCommandTimer>0){
+    const cmdAlpha=Math.min(1,voiceCommandTimer);
+    const cmdW=240, cmdH=32, cmdX=RENDER_W/2-cmdW/2, cmdY=38;
+    // Glowing background
+    const cmdGrd=ctx.createLinearGradient(cmdX,cmdY,cmdX+cmdW,cmdY);
+    cmdGrd.addColorStop(0,`rgba(0,40,80,${cmdAlpha*0.6})`);
+    cmdGrd.addColorStop(0.5,`rgba(0,60,120,${cmdAlpha*0.8})`);
+    cmdGrd.addColorStop(1,`rgba(0,40,80,${cmdAlpha*0.6})`);
+    ctx.fillStyle=cmdGrd;roundRect(ctx,cmdX,cmdY,cmdW,cmdH,6);ctx.fill();
+    ctx.strokeStyle=`rgba(80,200,255,${cmdAlpha*0.6})`;ctx.lineWidth=1.5;roundRect(ctx,cmdX,cmdY,cmdW,cmdH,6);ctx.stroke();
+    // Glow line at top
+    const topGrd=ctx.createLinearGradient(cmdX+20,cmdY,cmdX+cmdW-20,cmdY);
+    topGrd.addColorStop(0,'rgba(80,200,255,0)');topGrd.addColorStop(0.5,`rgba(80,200,255,${cmdAlpha*0.5})`);topGrd.addColorStop(1,'rgba(80,200,255,0)');
+    ctx.strokeStyle=topGrd;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(cmdX+20,cmdY);ctx.lineTo(cmdX+cmdW-20,cmdY);ctx.stroke();
+    // Icon + text
+    ctx.fillStyle=`rgba(140,230,255,${cmdAlpha})`;ctx.font='bold 14px "Segoe UI",sans-serif';ctx.textAlign='center';
+    ctx.fillText('\u{1F3A4}  '+lastVoiceCommand,RENDER_W/2,cmdY+22);
+  }
+
+  // ── SQUAD STATUS PANEL ──
+  const sqW=160, sqH=24, sqX=RENDER_W-sqW-10, sqY=6;
+  const sqGrd=ctx.createLinearGradient(sqX,sqY,sqX+sqW,sqY);
+  sqGrd.addColorStop(0,'rgba(0,30,15,0.5)');sqGrd.addColorStop(1,'rgba(0,15,8,0.6)');
+  ctx.fillStyle=sqGrd;roundRect(ctx,sqX,sqY,sqW,sqH,4);ctx.fill();
+  ctx.strokeStyle='rgba(0,200,100,0.25)';ctx.lineWidth=1;roundRect(ctx,sqX,sqY,sqW,sqH,4);ctx.stroke();
+  // Squad command icons
+  const cmdIcons={follow:'\u{1F6B6}',attack:'\u2694\uFE0F',retreat:'\u{1F6A8}',cover:'\u{1F6E1}\uFE0F',hold:'\u270B',medic:'\u2695\uFE0F',spread:'\u{1F4A8}'};
+  const cmdIcon=cmdIcons[squadCommand]||'\u{1F6B6}';
+  ctx.fillStyle=squadCommandTimer>0?'#6f8':'#4d7';ctx.font='bold 11px "Segoe UI",sans-serif';ctx.textAlign='right';
+  ctx.fillText(cmdIcon+' SQUAD: '+squadCommand.toUpperCase(),RENDER_W-16,sqY+17);
+  // Flash on new command
+  if(squadCommandTimer>2){
+    ctx.strokeStyle=`rgba(0,255,100,${(squadCommandTimer-2)*0.6})`;ctx.lineWidth=2;
+    roundRect(ctx,sqX-2,sqY-2,sqW+4,sqH+4,5);ctx.stroke();
+  }
+
+  // ── ALLY HEALTH PANEL ──
+  const allyPanelX=12, allyPanelY0=RENDER_H-258;
+  // Panel background
+  ctx.fillStyle='rgba(0,12,6,0.55)';roundRect(ctx,allyPanelX-2,allyPanelY0-14,108,allies.length*26+20,4);ctx.fill();
+  ctx.strokeStyle='rgba(0,140,70,0.2)';ctx.lineWidth=1;roundRect(ctx,allyPanelX-2,allyPanelY0-14,108,allies.length*26+20,4);ctx.stroke();
+  ctx.fillStyle='#4a8';ctx.font='bold 8px "Segoe UI",sans-serif';ctx.textAlign='left';
+  ctx.fillText('\u{1F6E1}\uFE0F FIRE TEAM',allyPanelX+4,allyPanelY0-4);
+  let allyHudY=allyPanelY0+4;
+  for(const a of allies){
+    const nameCol=a.alive?'#5fb':'#844';
+    ctx.fillStyle=nameCol;ctx.font='bold 8px "Segoe UI",sans-serif';ctx.textAlign='left';
+    ctx.fillText(a.name,allyPanelX+4,allyHudY+8);
+    if(a.alive){
+      const hpPct=a.health/a.maxHealth;
+      ctx.fillStyle='rgba(0,0,0,0.4)';ctx.fillRect(allyPanelX+4,allyHudY+11,80,4);
+      const hpGrd=ctx.createLinearGradient(allyPanelX+4,0,allyPanelX+4+80*hpPct,0);
+      if(hpPct>0.5){hpGrd.addColorStop(0,'#060');hpGrd.addColorStop(1,'#0d0');}
+      else if(hpPct>0.25){hpGrd.addColorStop(0,'#860');hpGrd.addColorStop(1,'#fd0');}
+      else{hpGrd.addColorStop(0,'#800');hpGrd.addColorStop(1,'#f40');}
+      ctx.fillStyle=hpGrd;ctx.fillRect(allyPanelX+4,allyHudY+11,80*hpPct,4);
+      // State indicator
+      ctx.fillStyle='#6a8';ctx.font='6px monospace';ctx.textAlign='right';
+      ctx.fillText(a.state.toUpperCase(),allyPanelX+100,allyHudY+8);
+    }else{
+      ctx.fillStyle='#f44';ctx.font='bold 7px "Segoe UI",sans-serif';
+      ctx.fillText('\u2620 KIA',allyPanelX+4,allyHudY+18);
+    }
+    allyHudY+=26;
   }
 
   // Damage vignette
@@ -1476,6 +2314,10 @@ function renderRadar(){
     if(Math.sqrt(dx*dx+dy*dy)>15) continue;const px2=rcx+dx*2.5,py2=rcy+dy*2.5;
     if(Math.sqrt((px2-rcx)**2+(py2-rcy)**2)>rS/2-2) continue;
     ctx.fillStyle='#0ff';ctx.fillRect(px2-1,py2-1,2,2);}
+  for(const a of allies){if(!a.alive) continue;const dx=a.x-player.x,dy=a.y-player.y;
+    if(Math.sqrt(dx*dx+dy*dy)>15) continue;const ax2=rcx+dx*2.5,ay2=rcy+dy*2.5;
+    if(Math.sqrt((ax2-rcx)**2+(ay2-rcy)**2)>rS/2-2) continue;
+    ctx.fillStyle='#4f8';ctx.beginPath();ctx.arc(ax2,ay2,2,0,Math.PI*2);ctx.fill();}
 }
 
 // ============================================================================
@@ -1581,9 +2423,148 @@ function initGame(){
   player.weapons[0].ammo=32;player.weapons[0].reserve=256;
   player.weapons[1].ammo=12;player.weapons[1].reserve=120;
   player.weapons[2].ammo=8;player.weapons[2].reserve=40;
-  projectiles=[];particles=[];gameTime=0;lightCacheValid=false;
+  player.grenades=4;player.grenadeTimer=0;
+  projectiles=[];particles=[];liveGrenades=[];gameTime=0;lightCacheValid=false;
   lastGestureFire=false;smoothLookX=0;smoothLookY=0;smoothMoveX=0;smoothMoveY=0;
-  initDoors();spawnEnemies();spawnPickups();gameRunning=true;
+  prevRightWristY=null;throwCooldown=0;
+  allies=[];voiceCommandTimer=0;squadCommand='follow';squadCommandTimer=0;
+  tutorialStep=0;tutorialTimer=0;tutorialArrowTarget=null;
+  if(currentLevel==='tutorial') {
+    loadTutorialMap();
+  } else {
+    // Restore original main map
+    for (let i = 0; i < MAP_W * MAP_H; i++) mapData[i] = mainMapData[i];
+    player.x=2.5;player.y=2.5;player.angle=0;
+  }
+  initDoors();spawnEnemies();spawnPickups();spawnAllies();gameRunning=true;
+}
+
+// ============================================================================
+//  TUTORIAL LEVEL
+// ============================================================================
+const tutorialMapData = [
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,3,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+];
+
+const TUTORIAL_STEPS = [
+  { msg: '👋 WELCOME SPARTAN! Turn your head left and right to look around', done: () => Math.abs(player.angle) > 0.4, time: 0 },
+  { msg: '🏃 TILT your head forward to walk! Lean back to go backwards', done: () => { const d=Math.sqrt((player.x-2.5)**2+(player.y-2.5)**2); return d > 1.5; }, time: 0 },
+  { msg: '👍 Nice! Now walk to the yellow marker — tilt your head that way!', target: {x:10.5,y:10.5}, done: () => Math.sqrt((player.x-10.5)**2+(player.y-10.5)**2) < 2.0, time: 0 },
+  { msg: '🔫 PINCH your right hand to SHOOT! Take out the enemy!', done: () => player.kills > 0, time: 0 },
+  { msg: '🚪 Walk to the small building and through the DOOR!', target: {x:16.5,y:15.5}, done: () => { const d=Math.sqrt((player.x-16.5)**2+(player.y-16.5)**2); return d < 1.5; }, time: 0 },
+  { msg: '🏁 GREAT JOB! Now find the green EXIT in the far corner!', target: {x:28.5,y:29.5}, done: () => false, time: 0 },
+];
+
+function loadTutorialMap() {
+  // Copy tutorial map into mapData
+  for (let i = 0; i < MAP_W * MAP_H; i++) mapData[i] = tutorialMapData[i];
+  player.x = 4.5; player.y = 4.5; player.angle = 0.7;
+}
+
+function spawnTutorialEnemies() {
+  enemies = [];
+  // Scattered easy grunts in the open arena
+  enemies.push(createEnemy('grunt', 12.5, 8.5));
+  enemies.push(createEnemy('grunt', 20.5, 12.5));
+  enemies.push(createEnemy('grunt', 8.5, 18.5));
+  enemies.push(createEnemy('grunt', 25.5, 22.5));
+  // Super easy — low health, slow fire, low damage
+  for (const e of enemies) { e.health = 10; e.maxHealth = 10; e.damage = 1; e.fireRate = 4.0; e.speed = 1.0; }
+}
+
+function spawnTutorialPickups() {
+  pickups = [];
+  // Generous pickups scattered around the open field
+  pickups.push({type:'health',x:6.5,y:6.5,amount:50,alive:true});
+  pickups.push({type:'health',x:20.5,y:20.5,amount:50,alive:true});
+  pickups.push({type:'ammo',x:15.5,y:5.5,weapon:0,alive:true});
+  pickups.push({type:'ammo',x:25.5,y:15.5,weapon:0,alive:true});
+  pickups.push({type:'shield',x:10.5,y:15.5,amount:50,alive:true});
+}
+
+function updateTutorial(dt) {
+  if (currentLevel !== 'tutorial') return;
+  tutorialTimer += dt;
+  const step = TUTORIAL_STEPS[tutorialStep];
+  if (!step) return;
+  tutorialArrowTarget = step.target || null;
+  if (step.done()) {
+    tutorialStep++;
+    tutorialTimer = 0;
+    if (tutorialStep < TUTORIAL_STEPS.length) playSound('pickup');
+  }
+}
+
+function renderTutorialHUD() {
+  if (currentLevel !== 'tutorial') return;
+  const step = TUTORIAL_STEPS[tutorialStep];
+  if (!step) return;
+  // Message box at top center
+  const msg = step.msg;
+  const boxW = Math.min(RENDER_W - 40, 700), boxH = 50;
+  const boxX = (RENDER_W - boxW) / 2, boxY = 70;
+  const alpha = Math.min(1, tutorialTimer * 2);
+  ctx.fillStyle = `rgba(0,20,40,${0.85*alpha})`;
+  roundRect(ctx, boxX, boxY, boxW, boxH, 10); ctx.fill();
+  ctx.strokeStyle = `rgba(0,200,255,${0.5*alpha})`; ctx.lineWidth = 2;
+  roundRect(ctx, boxX, boxY, boxW, boxH, 10); ctx.stroke();
+  ctx.fillStyle = `rgba(200,240,255,${alpha})`;
+  ctx.font = 'bold 16px "Segoe UI",sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(msg, RENDER_W/2, boxY + 32);
+  // Step counter
+  ctx.fillStyle = `rgba(100,180,255,${0.6*alpha})`;
+  ctx.font = '11px "Segoe UI",sans-serif';
+  ctx.fillText('Step ' + (tutorialStep+1) + '/' + TUTORIAL_STEPS.length, RENDER_W/2, boxY + boxH + 16);
+
+  // Arrow pointing toward target
+  if (tutorialArrowTarget) {
+    const tdx = tutorialArrowTarget.x - player.x, tdy = tutorialArrowTarget.y - player.y;
+    const tDist = Math.sqrt(tdx*tdx + tdy*tdy);
+    if (tDist > 1.0) {
+      let tAngle = Math.atan2(tdy, tdx) - player.angle;
+      while(tAngle > Math.PI) tAngle -= 2*Math.PI; while(tAngle < -Math.PI) tAngle += 2*Math.PI;
+      const arrowX = RENDER_W/2 + Math.cos(tAngle) * 80;
+      const arrowY = RENDER_H/2 + Math.sin(tAngle) * 60;
+      const pulse = 0.7 + Math.sin(gameTime * 4) * 0.3;
+      ctx.fillStyle = `rgba(255,220,0,${pulse})`;
+      ctx.beginPath();
+      ctx.moveTo(arrowX + Math.cos(tAngle)*15, arrowY + Math.sin(tAngle)*15);
+      ctx.lineTo(arrowX + Math.cos(tAngle+2.5)*10, arrowY + Math.sin(tAngle+2.5)*10);
+      ctx.lineTo(arrowX + Math.cos(tAngle-2.5)*10, arrowY + Math.sin(tAngle-2.5)*10);
+      ctx.closePath(); ctx.fill();
+    }
+  }
 }
 
 // ============================================================================
@@ -1595,10 +2576,10 @@ function gameLoop(timestamp){
   lastTime=timestamp;
   if(gameRunning){
     gameTime+=dt;
-    updatePlayer(dt);updateEnemies(dt);updateProjectiles(dt);updateParticles(dt);
+    updatePlayer(dt);updateEnemies(dt);updateAllies(dt);updateProjectiles(dt);updateLiveGrenades(dt);updateParticles(dt);updateTutorial(dt);
     renderScene();renderSprites();renderParticles();
     ctx.putImageData(screenBuffer,0,0);
-    applyPostFX();renderHUD();renderWeapon();
+    applyPostFX();renderHUD();renderWeapon();renderTutorialHUD();
   }
   requestAnimationFrame(gameLoop);
 }
@@ -1618,23 +2599,42 @@ document.getElementById('toggle-help').addEventListener('click', ()=>{
 });
 
 document.getElementById('btn-camera').addEventListener('click', async ()=>{
-  document.getElementById('cam-status').textContent='Initializing camera...';
+  document.getElementById('cam-status').textContent='Initializing camera & microphone...';
+  currentLevel = 'main';
   const ok = await initHandTracking();
   document.getElementById('overlay').style.display='none';
-  initAudio(); initGame();
-  if(!ok) canvas.requestPointerLock(); // Fallback to mouse if camera failed
+  initAudio(); initGame(); await initVoice();
+  if(!ok) canvas.requestPointerLock();
   lastTime=performance.now(); requestAnimationFrame(gameLoop);
 });
 
-document.getElementById('btn-keyboard').addEventListener('click', ()=>{
+document.getElementById('btn-camera-tutorial').addEventListener('click', async ()=>{
+  document.getElementById('cam-status').textContent='Initializing camera & microphone...';
+  currentLevel = 'tutorial';
+  const ok = await initHandTracking();
+  document.getElementById('overlay').style.display='none';
+  initAudio(); initGame(); await initVoice();
+  if(!ok) canvas.requestPointerLock();
+  lastTime=performance.now(); requestAnimationFrame(gameLoop);
+});
+
+document.getElementById('btn-keyboard').addEventListener('click', async ()=>{
   document.getElementById('overlay').style.display='none';
   document.getElementById('instr-camera').style.display='none';
-  initAudio(); initGame(); canvas.requestPointerLock();
+  currentLevel = 'main';
+  initAudio(); initGame(); await initVoice(); canvas.requestPointerLock();
   lastTime=performance.now(); requestAnimationFrame(gameLoop);
 });
 
 // Show appropriate instructions on hover
+document.getElementById('btn-preview-cam').addEventListener('click', ()=>{ startOverlayPreview(); });
+
 document.getElementById('btn-camera').addEventListener('mouseenter',()=>{
+  document.getElementById('instr-camera').style.display='block';
+  document.getElementById('instr-keyboard').style.display='none';
+  document.getElementById('cam-select-row').style.display='flex';
+});
+document.getElementById('btn-camera-tutorial').addEventListener('mouseenter',()=>{
   document.getElementById('instr-camera').style.display='block';
   document.getElementById('instr-keyboard').style.display='none';
   document.getElementById('cam-select-row').style.display='flex';
