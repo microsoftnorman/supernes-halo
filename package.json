@@ -1,0 +1,7 @@
+{
+  "name": "supernes-halo",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/game.test.js"
+  }
+}

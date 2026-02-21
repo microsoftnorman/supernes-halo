@@ -304,6 +304,261 @@ function playSound(type) {
 }
 
 // ============================================================================
+//  PROCEDURAL MUSIC ENGINE — Halo-Inspired Adaptive Soundtrack
+// ============================================================================
+const music = {
+  playing: false, enabled: true, masterGain: null,
+  combatIntensity: 0, currentChord: 0, measure: 0, beat: 0,
+  scheduledUntil: 0, bpm: 70,
+  padGain: null, bassGain: null, arpGain: null, percGain: null,
+  ambientGain: null, combatGain: null, reverbNode: null,
+};
+
+// C minor scale — the Halo sound
+const MF = {
+  C2:65.41, Eb2:77.78, G2:98.00, Bb2:116.54,
+  C3:130.81, D3:146.83, Eb3:155.56, F3:174.61, G3:196.00, Ab3:207.65, Bb3:233.08,
+  C4:261.63, D4:293.66, Eb4:311.13, F4:349.23, G4:392.00, Ab4:415.30, Bb4:466.16,
+  C5:523.25, Eb5:622.25, G5:783.99,
+};
+
+const AMBIENT_CHORDS = [
+  [MF.C3, MF.Eb3, MF.G3, MF.C4],
+  [MF.Ab3, MF.C4, MF.Eb4, MF.Ab4],
+  [MF.Eb3, MF.G3, MF.Bb3, MF.Eb4],
+  [MF.Bb2, MF.D3, MF.F3, MF.Bb3],
+];
+const COMBAT_CHORDS = [
+  [MF.C3, MF.Eb3, MF.G3],
+  [MF.F3, MF.Ab3, MF.C4],
+  [MF.G3, MF.Bb3, MF.D4],
+  [MF.C3, MF.Eb3, MF.G3],
+];
+const ARP_AMB = [MF.C5, MF.Eb5, MF.G5, MF.Eb5, MF.C5, MF.Bb4, MF.G4, MF.Bb4];
+const ARP_CMB = [MF.C4, MF.Eb4, MF.G4, MF.C5, MF.G4, MF.Eb4, MF.C4, MF.Bb3];
+
+function initMusic() {
+  if (!audioCtx || music.playing) return;
+  music.masterGain = audioCtx.createGain();
+  music.masterGain.gain.value = 0.22;
+
+  // Reverb impulse for choir/pad space
+  const irLen = audioCtx.sampleRate * 2;
+  const irBuf = audioCtx.createBuffer(2, irLen, audioCtx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = irBuf.getChannelData(ch);
+    for (let i = 0; i < irLen; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / irLen, 2.5) * 0.25;
+  }
+  music.reverbNode = audioCtx.createConvolver();
+  music.reverbNode.buffer = irBuf;
+  const revGain = audioCtx.createGain();
+  revGain.gain.value = 0.35;
+  music.reverbNode.connect(revGain);
+  revGain.connect(music.masterGain);
+
+  music.ambientGain = audioCtx.createGain();
+  music.ambientGain.gain.value = 1.0;
+  music.ambientGain.connect(music.masterGain);
+
+  music.combatGain = audioCtx.createGain();
+  music.combatGain.gain.value = 0.0;
+  music.combatGain.connect(music.masterGain);
+
+  music.padGain = audioCtx.createGain();
+  music.padGain.gain.value = 0.35;
+  music.padGain.connect(music.ambientGain);
+  music.padGain.connect(music.reverbNode);
+
+  music.bassGain = audioCtx.createGain();
+  music.bassGain.gain.value = 0.18;
+  music.bassGain.connect(music.masterGain);
+
+  music.arpGain = audioCtx.createGain();
+  music.arpGain.gain.value = 0.07;
+  music.arpGain.connect(music.ambientGain);
+  music.arpGain.connect(music.reverbNode);
+
+  music.percGain = audioCtx.createGain();
+  music.percGain.gain.value = 0.0;
+  music.percGain.connect(music.combatGain);
+
+  music.masterGain.connect(audioCtx.destination);
+  music.playing = true;
+  music.scheduledUntil = audioCtx.currentTime;
+  music.measure = 0;
+  music.beat = 0;
+  music.currentChord = 0;
+  music.combatIntensity = 0;
+}
+
+function _mPad(freq, t, dur, dest, vol, type) {
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = type || 'sine';
+  o.frequency.value = freq;
+  // Add subtle vibrato for choir effect
+  const lfo = audioCtx.createOscillator(), lfoG = audioCtx.createGain();
+  lfo.type = 'sine'; lfo.frequency.value = 4.5 + Math.random() * 1.5;
+  lfoG.gain.value = freq * 0.004;
+  lfo.connect(lfoG); lfoG.connect(o.frequency);
+  lfo.start(t); lfo.stop(t + dur + 0.1);
+  // Slow choir-like envelope
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vol, t + dur * 0.35);
+  g.gain.setValueAtTime(vol * 0.85, t + dur * 0.6);
+  g.gain.linearRampToValueAtTime(0, t + dur);
+  o.connect(g); g.connect(dest);
+  o.start(t); o.stop(t + dur + 0.1);
+}
+
+function _mBass(freq, t, dur, ci) {
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = ci > 0.4 ? 'sawtooth' : 'sine';
+  o.frequency.value = freq;
+  const v = 0.1 + ci * 0.08;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(v, t + 0.04);
+  g.gain.linearRampToValueAtTime(v * 0.5, t + dur * 0.7);
+  g.gain.linearRampToValueAtTime(0, t + dur);
+  const flt = audioCtx.createBiquadFilter();
+  flt.type = 'lowpass'; flt.frequency.value = 160 + ci * 220;
+  o.connect(flt); flt.connect(g); g.connect(music.bassGain);
+  o.start(t); o.stop(t + dur + 0.1);
+}
+
+function _mArp(freq, t, dur, ci) {
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = ci > 0.5 ? 'sawtooth' : 'triangle';
+  o.frequency.value = freq;
+  const v = ci > 0.3 ? 0.05 + ci * 0.04 : 0.035;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(v, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(music.arpGain);
+  o.start(t); o.stop(t + dur + 0.05);
+}
+
+function _mKick(t, ci) {
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(110, t);
+  o.frequency.exponentialRampToValueAtTime(30, t + 0.12);
+  g.gain.setValueAtTime(0.14 * ci, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+  o.connect(g); g.connect(music.percGain);
+  o.start(t); o.stop(t + 0.25);
+}
+
+function _mHat(t, ci) {
+  const b = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.04, audioCtx.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
+  const s = audioCtx.createBufferSource(), g = audioCtx.createGain();
+  const f = audioCtx.createBiquadFilter();
+  s.buffer = b; f.type = 'highpass'; f.frequency.value = 7500;
+  g.gain.setValueAtTime(0.04 * ci, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+  s.connect(f); f.connect(g); g.connect(music.percGain);
+  s.start(t); s.stop(t + 0.05);
+}
+
+function _mSnare(t, ci) {
+  const b = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.08, audioCtx.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2);
+  const s = audioCtx.createBufferSource(), g = audioCtx.createGain();
+  s.buffer = b;
+  g.gain.setValueAtTime(0.07 * ci, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+  s.connect(g); g.connect(music.percGain);
+  s.start(t); s.stop(t + 0.1);
+  const o = audioCtx.createOscillator(), g2 = audioCtx.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(185, t); o.frequency.exponentialRampToValueAtTime(70, t + 0.05);
+  g2.gain.setValueAtTime(0.05 * ci, t); g2.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+  o.connect(g2); g2.connect(music.percGain);
+  o.start(t); o.stop(t + 0.09);
+}
+
+function _mSchedule() {
+  if (!music.playing || !music.enabled || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  while (music.scheduledUntil < now + 1.0) {
+    const bt = music.scheduledUntil;
+    const bd = 60 / music.bpm;
+    const ci = music.combatIntensity;
+    const ac = AMBIENT_CHORDS[music.currentChord % 4];
+    const cc = COMBAT_CHORDS[music.currentChord % 4];
+
+    // Choir pad — new chord every 4 beats
+    if (music.beat % 4 === 0) {
+      for (let i = 0; i < ac.length; i++) {
+        _mPad(ac[i], bt, bd * 4.2, music.padGain, 0.07);
+        _mPad(ac[i] * 1.003, bt, bd * 4.2, music.padGain, 0.035);
+        _mPad(ac[i] * 0.997, bt, bd * 4.2, music.padGain, 0.035);
+      }
+      // High octave choir voice
+      _mPad(ac[0] * 2, bt, bd * 4.2, music.padGain, 0.02, 'sine');
+      // Extra voice for richness on alternating chords
+      if (music.currentChord % 2 === 0) {
+        _mPad(ac[2] * 2, bt + bd, bd * 3, music.padGain, 0.015, 'sine');
+      }
+      music.currentChord = (music.currentChord + 1) % 4;
+    }
+
+    // Bass drone
+    if (music.beat % 2 === 0) {
+      _mBass(ci > 0.4 ? cc[0] * 0.5 : ac[0] * 0.5, bt, bd * 2.1, ci);
+    }
+
+    // Arpeggios — sparse ambient, dense combat
+    if (Math.random() < (ci > 0.3 ? 0.85 : 0.2)) {
+      const an = ci > 0.3 ? ARP_CMB[music.beat % 8] : ARP_AMB[music.beat % 8];
+      _mArp(an, bt, bd * 0.45, ci);
+    }
+
+    // Percussion — combat only
+    if (ci > 0.2) {
+      if (music.beat % 4 === 0 || music.beat % 4 === 2) _mKick(bt, ci);
+      if (ci > 0.5) _mHat(bt, ci);
+      if (ci > 0.4 && (music.beat % 4 === 1 || music.beat % 4 === 3)) _mSnare(bt, ci);
+    }
+
+    music.beat++;
+    if (music.beat >= 16) { music.beat = 0; music.measure++; }
+    music.scheduledUntil += bd;
+  }
+}
+
+function updateMusic(dt) {
+  if (!music.playing || !music.enabled) return;
+  let target = 0;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const dx = e.x - player.x, dy = e.y - player.y, dist = Math.sqrt(dx * dx + dy * dy);
+    if (e.state === 'chase' && dist < 15) target = Math.max(target, 1.0 - dist / 15);
+    else if (dist < 10) target = Math.max(target, 0.15);
+  }
+  const spd = target > music.combatIntensity ? 2.0 : 0.5;
+  music.combatIntensity += (target - music.combatIntensity) * spd * dt;
+  music.combatIntensity = Math.max(0, Math.min(1, music.combatIntensity));
+  music.bpm = 70 + music.combatIntensity * 50;
+  if (music.ambientGain) music.ambientGain.gain.setTargetAtTime(1.0 - music.combatIntensity * 0.3, audioCtx.currentTime, 0.3);
+  if (music.combatGain) music.combatGain.gain.setTargetAtTime(music.combatIntensity, audioCtx.currentTime, 0.3);
+  if (music.percGain) music.percGain.gain.setTargetAtTime(0.12 + music.combatIntensity * 0.2, audioCtx.currentTime, 0.2);
+  _mSchedule();
+}
+
+function toggleMusic() {
+  if (!audioCtx) return;
+  music.enabled = !music.enabled;
+  if (music.enabled) {
+    if (!music.playing) initMusic();
+    if (music.masterGain) music.masterGain.gain.setTargetAtTime(0.22, audioCtx.currentTime, 0.3);
+  } else {
+    if (music.masterGain) music.masterGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.3);
+  }
+}
+
+// ============================================================================
 //  MAP & DOOR SYSTEM
 // ============================================================================
 const MAP_W = 32, MAP_H = 32;
@@ -1223,7 +1478,7 @@ function startReload() {
 // ============================================================================
 const keys={};
 let mouseDX=0, mouseDY=0, mouseDown=false, mouseLocked=false;
-document.addEventListener('keydown',e=>{keys[e.code]=true;e.preventDefault();});
+document.addEventListener('keydown',e=>{keys[e.code]=true;if(e.code==='KeyM'&&gameRunning)toggleMusic();e.preventDefault();});
 document.addEventListener('keyup',e=>{keys[e.code]=false;});
 document.addEventListener('mousedown',e=>{if(e.button===0)mouseDown=true;});
 document.addEventListener('mouseup',e=>{if(e.button===0)mouseDown=false;});
@@ -2291,6 +2546,16 @@ function renderHUD(){
   if(player.shieldFlash>0.1){ctx.strokeStyle=`rgba(0,150,255,${player.shieldFlash*0.2})`;ctx.lineWidth=2;
     const ins=30-player.shieldFlash*20;roundRect(ctx,ins,ins,RENDER_W-ins*2,RENDER_H-ins*2,8);ctx.stroke();}
   if(player.muzzleFlash>0.5){const ma=(player.muzzleFlash-0.5)*0.15;ctx.fillStyle=`rgba(255,220,100,${ma})`;ctx.fillRect(0,RENDER_H*0.5,RENDER_W,RENDER_H*0.5);}
+
+  // Music indicator
+  const muX=RENDER_W-90,muY=RENDER_H-135;
+  ctx.fillStyle='rgba(0,10,20,0.5)';roundRect(ctx,muX,muY,80,18,3);ctx.fill();
+  ctx.fillStyle=music.enabled?'#4af':'#555';ctx.font='bold 10px "Segoe UI",sans-serif';ctx.textAlign='left';
+  ctx.fillText(music.enabled?'\u266B MUSIC':'\u266B MUTED',muX+8,muY+13);
+  if(music.combatIntensity>0.1){const ciW=60*music.combatIntensity;
+    ctx.fillStyle='rgba(255,80,40,0.4)';ctx.fillRect(muX+10,muY+16,ciW,2);}
+  ctx.fillStyle='rgba(100,150,200,0.3)';ctx.font='8px "Segoe UI",sans-serif';
+  ctx.fillText('[M] toggle',muX+8,muY+28);
 }
 
 function roundRect(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.quadraticCurveTo(x+w,y,x+w,y+r);c.lineTo(x+w,y+h-r);c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);c.lineTo(x+r,y+h);c.quadraticCurveTo(x,y+h,x,y+h-r);c.lineTo(x,y+r);c.quadraticCurveTo(x,y,x+r,y);c.closePath();}
@@ -2437,6 +2702,7 @@ function initGame(){
     player.x=2.5;player.y=2.5;player.angle=0;
   }
   initDoors();spawnEnemies();spawnPickups();spawnAllies();gameRunning=true;
+  initMusic();
 }
 
 // ============================================================================
@@ -2576,7 +2842,7 @@ function gameLoop(timestamp){
   lastTime=timestamp;
   if(gameRunning){
     gameTime+=dt;
-    updatePlayer(dt);updateEnemies(dt);updateAllies(dt);updateProjectiles(dt);updateLiveGrenades(dt);updateParticles(dt);updateTutorial(dt);
+    updatePlayer(dt);updateEnemies(dt);updateAllies(dt);updateProjectiles(dt);updateLiveGrenades(dt);updateParticles(dt);updateTutorial(dt);updateMusic(dt);
     renderScene();renderSprites();renderParticles();
     ctx.putImageData(screenBuffer,0,0);
     applyPostFX();renderHUD();renderWeapon();renderTutorialHUD();
